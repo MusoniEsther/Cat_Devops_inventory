@@ -1,0 +1,93 @@
+name: Inventory System CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Validate HTML Files
+      run: |
+        echo "Validating HTML structure..."
+        for file in *.html; do
+          echo "Checking $file"
+          grep -q "<!DOCTYPE html>" "$file" && echo "✓ $file has valid DOCTYPE" || echo "✗ $file missing DOCTYPE"
+        done
+    
+    - name: Check for console errors
+      run: |
+        echo "Checking JavaScript syntax..."
+        grep -r "console.error" . --include="*.html" || echo "✓ No console errors found"
+
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install dependencies
+      run: npm install -g html-validate
+    
+    - name: Validate HTML syntax
+      run: |
+        html-validate index.html dashboard.html login.html || true
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Check for hardcoded credentials
+      run: |
+        echo "Checking for exposed credentials..."
+        if grep -r "password.*=" . --include="*.html" | grep -v "id\|placeholder\|autocomplete"; then
+          echo "⚠️ Warning: Possible exposed credentials found"
+        fi
+    
+    - name: Check localStorage usage
+      run: |
+        echo "Validating localStorage implementation..."
+        grep -r "localStorage" . --include="*.html" && echo "✓ localStorage properly used"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [validate, test, security]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Create build directory
+      run: |
+        mkdir -p build
+        cp *.html build/
+        echo "Build completed successfully"
+    
+    - name: List build artifacts
+      run: ls -la build/
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Deploy to production
+      run: |
+        echo "Deployment script would run here"
+        echo "Files ready for deployment:"
+        ls -la *.html

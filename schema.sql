@@ -1,0 +1,23 @@
+CREATE TABLE items (
+  id CHAR(36) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  qty INT NOT NULL DEFAULT 0,
+  price DECIMAL(10,2) NOT NULL DEFAULT 0,
+  location VARCHAR(255) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE item_history (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  item_id CHAR(36) NOT NULL,
+  action ENUM('create','update','delete') NOT NULL,
+  before_qty INT,
+  after_qty INT,
+  delta INT,
+  actor VARCHAR(255),
+  ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
+  INDEX (item_id),
+  INDEX (ts)
+);
