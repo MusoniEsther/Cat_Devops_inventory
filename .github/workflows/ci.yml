@@ -105,82 +105,72 @@ jobs:
     - name: Send Slack Notification
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        BUILD_STATUS: ${{ needs.build.result }}
+        REPO: ${{ github.repository }}
+        BRANCH: ${{ github.ref_name }}
+        AUTHOR: ${{ github.actor }}
+        COMMIT: ${{ github.sha }}
+        RUN_ID: ${{ github.run_id }}
+        SERVER_URL: ${{ github.server_url }}
       run: |
         if [ -z "$SLACK_WEBHOOK_URL" ]; then
           echo "⚠️  Slack webhook not configured"
           exit 0
         fi
 
-        # Determine status and color
-        if [ "${{ needs.build.result }}" = "success" ]; then
-          STATUS="SUCCESS"
+        if [ "$BUILD_STATUS" = "success" ]; then
+          STATUS_TEXT="✅ SUCCESS"
           COLOR="36a64f"
-          EMOJI="✅"
         else
-          STATUS="FAILED"
-          COLOR="ff0000"
-          EMOJI="❌"
+          STATUS_TEXT="❌ FAILED"
+          COLOR="danger"
         fi
 
-        # Create Slack payload
-        PAYLOAD=$(cat <<'EOF'
+        curl -X POST "$SLACK_WEBHOOK_URL" \
+          -H 'Content-Type: application/json' \
+          -d @- <<EOF
         {
-          "text": "GitHub Actions CI Pipeline",
           "attachments": [
             {
-              "fallback": "GitHub Actions Notification",
               "color": "$COLOR",
-              "title": "$EMOJI CI Pipeline - $STATUS",
-              "title_link": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "title": "CI Pipeline - $STATUS_TEXT",
+              "text": "Build Status Update",
               "fields": [
                 {
                   "title": "Repository",
-                  "value": "${{ github.repository }}",
+                  "value": "$REPO",
                   "short": true
                 },
                 {
                   "title": "Branch",
-                  "value": "${{ github.ref_name }}",
+                  "value": "$BRANCH",
+                  "short": true
+                },
+                {
+                  "title": "Author",
+                  "value": "$AUTHOR",
                   "short": true
                 },
                 {
                   "title": "Commit",
-                  "value": "${{ github.sha }}",
-                  "short": false
-                },
-                {
-                  "title": "Author",
-                  "value": "${{ github.actor }}",
-                  "short": true
-                },
-                {
-                  "title": "Workflow",
-                  "value": "${{ github.workflow }}",
+                  "value": "${COMMIT:0:7}",
                   "short": true
                 }
               ],
               "actions": [
                 {
                   "type": "button",
-                  "text": "View Workflow Logs",
-                  "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  "text": "View Workflow",
+                  "url": "$SERVER_URL/$REPO/actions/runs/$RUN_ID"
                 }
               ],
-              "footer": "GitHub Actions",
-              "ts": $(date +%s)
+              "footer": "GitHub Actions"
             }
           ]
         }
         EOF
-        )
 
-        # Send to Slack
-        curl -X POST -H 'Content-type: application/json' \
-          --data "$PAYLOAD" \
-          "$SLACK_WEBHOOK_URL" \
-          -w "\n"
-
-        echo "✅ Slack notification sent"
+        echo "✅ Slack message sent successfully"
 
   success:
     runs-on: ubuntu-latest
