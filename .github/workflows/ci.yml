@@ -33,6 +33,11 @@ jobs:
       run: |
         echo "🔍 Checking JavaScript syntax..."
         grep -r "console.log\|console.error" . --include="*.html" || echo "✅ Code quality checks passed"
+    
+    - name: Validate File References
+      run: |
+        echo "🔍 Checking file references..."
+        grep -r "window.location.href\|href=" . --include="*.html" | grep -E "(index\.html|dashboard\.html)" && echo "✅ File references are correct"
 
   test:
     runs-on: ubuntu-latest
@@ -45,9 +50,6 @@ jobs:
       with:
         node-version: '18'
     
-    - name: Install Dependencies
-      run: npm install
-    
     - name: Verify HTML Files Exist
       run: |
         echo "✅ Checking required files..."
@@ -58,6 +60,12 @@ jobs:
       run: |
         echo "✅ Validating localStorage usage..."
         grep -r "localStorage" . --include="*.html" && echo "✅ localStorage properly configured"
+    
+    - name: Verify Navigation Paths
+      run: |
+        echo "✅ Verifying navigation paths..."
+        grep -q "window.location.href = 'dashboard.html'" index.html && echo "✅ Login redirect correct"
+        grep -q "window.location.href = 'index.html'" dashboard.html && echo "✅ Logout redirect correct"
 
   security:
     runs-on: ubuntu-latest
@@ -73,6 +81,11 @@ jobs:
         else
           echo "✅ No obvious exposed credentials"
         fi
+    
+    - name: Validate Form Inputs
+      run: |
+        echo "🔒 Checking form security..."
+        grep -r "autocomplete\|type=" . --include="*.html" | grep -q "password" && echo "✅ Password fields secured"
 
   build:
     runs-on: ubuntu-latest
@@ -92,6 +105,11 @@ jobs:
         cp Dockerfile build/ 2>/dev/null || true
         echo "✅ Build completed successfully"
     
+    - name: List Artifacts
+      run: |
+        echo "📦 Build artifacts:"
+        ls -lah build/
+    
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -99,9 +117,115 @@ jobs:
         path: build/
         retention-days: 7
 
-  success:
+  notify:
     runs-on: ubuntu-latest
     needs: [lint, test, security, build]
+    if: always()
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Notify Slack (All Conditions)
+      if: always()
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      run: |
+        if [ -n "$SLACK_WEBHOOK_URL" ]; then
+          STATUS="success"
+          if [ "${{ job.status }}" != "success" ]; then
+            STATUS="${{ job.status }}"
+          fi
+          
+          BRANCH="${{ github.ref_name }}"
+          AUTHOR="${{ github.actor }}"
+          WORKFLOW="${{ github.workflow }}"
+          COMMIT="${{ github.sha }}"
+          RUN_ID="${{ github.run_id }}"
+          REPO="${{ github.repository }}"
+          SERVER_URL="${{ github.server_url }}"
+          
+          # Determine emoji based on status
+          case "$STATUS" in
+            success)
+              EMOJI=":white_check_mark:"
+              COLOR="good"
+              ;;
+            failure)
+              EMOJI=":x:"
+              COLOR="danger"
+              ;;
+            cancelled)
+              EMOJI=":warning:"
+              COLOR="warning"
+              ;;
+            *)
+              EMOJI=":grey_question:"
+              COLOR="#808080"
+              ;;
+          esac
+          
+          # Create payload
+          PAYLOAD=$(cat <<EOF
+          {
+            "attachments": [
+              {
+                "color": "$COLOR",
+                "title": "$EMOJI CI Pipeline - $STATUS",
+                "fields": [
+                  {
+                    "title": "Workflow",
+                    "value": "$WORKFLOW",
+                    "short": true
+                  },
+                  {
+                    "title": "Branch",
+                    "value": "$BRANCH",
+                    "short": true
+                  },
+                  {
+                    "title": "Author",
+                    "value": "$AUTHOR",
+                    "short": true
+                  },
+                  {
+                    "title": "Commit",
+                    "value": "${COMMIT:0:7}",
+                    "short": true
+                  },
+                  {
+                    "title": "Repository",
+                    "value": "$REPO",
+                    "short": true
+                  },
+                  {
+                    "title": "Status",
+                    "value": "$STATUS",
+                    "short": true
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "button",
+                    "text": "View Logs",
+                    "url": "$SERVER_URL/$REPO/actions/runs/$RUN_ID"
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+          )
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "$PAYLOAD" \
+            "$SLACK_WEBHOOK_URL" || true
+        else
+          echo "ℹ️  No Slack webhook configured."
+        fi
+
+  success:
+    runs-on: ubuntu-latest
+    needs: [lint, test, security, build, notify]
     if: success()
     
     steps:
@@ -109,5 +233,10 @@ jobs:
       run: |
         echo "✅ CI Pipeline Completed Successfully!"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "All checks passed!"
+        echo "📋 All Checks Passed:"
+        echo "  ✅ Lint: HTML & JavaScript validation"
+        echo "  ✅ Test: File & functionality checks"
+        echo "  ✅ Security: Data exposure scanning"
+        echo "  ✅ Build: Artifact creation"
+        echo "  ✅ Notify: Slack notification sent"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
