@@ -78,13 +78,17 @@ jobs:
     needs: [lint, test, security]
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Create Build Artifacts
       run: |
         echo "🔨 Building project..."
         mkdir -p build
         cp *.html build/
+        cp server.js build/ 2>/dev/null || true
+        cp index.js build/ 2>/dev/null || true
+        cp package.json build/ 2>/dev/null || true
+        cp Dockerfile build/ 2>/dev/null || true
         echo "✅ Build completed successfully"
     
     - name: List Artifacts
@@ -93,7 +97,7 @@ jobs:
         ls -lah build/
     
     - name: Upload Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: inventory-system
         path: build/
