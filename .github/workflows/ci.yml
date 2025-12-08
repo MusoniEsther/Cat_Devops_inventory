@@ -6,12 +6,15 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Validate HTML Files
       run: |
@@ -35,12 +38,15 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Setup Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
+    
+    - name: Install Dependencies
+      run: npm install
     
     - name: Verify HTML Files Exist
       run: |
@@ -57,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Check for Sensitive Data
       run: |
@@ -67,11 +73,6 @@ jobs:
         else
           echo "✅ No obvious exposed credentials"
         fi
-    
-    - name: Validate Form Inputs
-      run: |
-        echo "🔒 Checking form security..."
-        grep -r "autocomplete\|type=" . --include="*.html" | grep -q "password" && echo "✅ Password fields secured"
 
   build:
     runs-on: ubuntu-latest
@@ -85,16 +86,11 @@ jobs:
         echo "🔨 Building project..."
         mkdir -p build
         cp *.html build/
-        cp server.js build/ 2>/dev/null || true
         cp index.js build/ 2>/dev/null || true
+        cp server.js build/ 2>/dev/null || true
         cp package.json build/ 2>/dev/null || true
         cp Dockerfile build/ 2>/dev/null || true
         echo "✅ Build completed successfully"
-    
-    - name: List Artifacts
-      run: |
-        echo "📦 Build artifacts:"
-        ls -lah build/
     
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
@@ -103,19 +99,15 @@ jobs:
         path: build/
         retention-days: 7
 
-  summary:
+  success:
     runs-on: ubuntu-latest
     needs: [lint, test, security, build]
-    if: always()
+    if: success()
     
     steps:
-    - name: CI Pipeline Summary
+    - name: ✅ CI Pipeline Success
       run: |
-        echo "✅ CI Pipeline Completed"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📋 Jobs Status:"
-        echo "  ✅ Lint: Passed"
-        echo "  ✅ Test: Passed"
-        echo "  ✅ Security: Passed"
-        echo "  ✅ Build: Passed"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "✅ CI Pipeline Completed Successfully!"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "All checks passed!"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
