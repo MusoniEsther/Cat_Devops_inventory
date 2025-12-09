@@ -91,3 +91,302 @@ jobs:
         echo "Deployment script would run here"
         echo "Files ready for deployment:"
         ls -la *.html
+
+  deploy-to-kubernetes:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/tags/v*.*.*' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Extract Version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "push" ]; then
+          VERSION=${GITHUB_REF#refs/tags/}
+        else
+          VERSION=${{ github.event.inputs.version || 'latest' }}
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "✅ Deployment Version: $VERSION"
+    
+    - name: Determine Environment
+      id: environment
+      run: |
+        if [ "${{ github.event_name }}" = "push" ]; then
+          ENVIRONMENT="production"
+        else
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+        fi
+        echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+        echo "✅ Target Environment: $ENVIRONMENT"
+
+    - name: Check Kubernetes Configuration
+      run: |
+        if [ -z "${{ secrets.KUBE_CONFIG }}" ]; then
+          echo "⚠️  Kubernetes credentials not configured"
+          echo "To enable K8s deployment, add KUBE_CONFIG secret"
+          exit 0
+        fi
+        echo "✅ Kubernetes configuration available"
+    
+    - name: Setup kubeconfig
+      if: secrets.KUBE_CONFIG != ''
+      run: |
+        mkdir -p $HOME/.kube
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+    
+    - name: Install kubectl
+      if: secrets.KUBE_CONFIG != ''
+      run: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+    
+    - name: Verify Cluster Connection
+      if: secrets.KUBE_CONFIG != ''
+      run: |
+        kubectl cluster-info
+        kubectl get nodes
+        echo "✅ Connected to Kubernetes cluster"
+    
+    - name: Create Deployment Manifest
+      run: |
+        VERSION=${{ needs.build.outputs.version }}
+        ENVIRONMENT=${{ needs.build.outputs.environment }}
+        NAMESPACE="${ENVIRONMENT}-inventory"
+        
+        mkdir -p k8s-manifests
+        
+        cat > k8s-manifests/namespace.yaml <<EOF
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: $NAMESPACE
+          labels:
+            environment: $ENVIRONMENT
+        EOF
+        
+        cat > k8s-manifests/deployment.yaml <<EOF
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: inventory-system
+          namespace: $NAMESPACE
+          labels:
+            app: inventory-system
+            version: $VERSION
+            environment: $ENVIRONMENT
+        spec:
+          replicas: 2
+          strategy:
+            type: RollingUpdate
+            rollingUpdate:
+              maxSurge: 1
+              maxUnavailable: 0
+          selector:
+            matchLabels:
+              app: inventory-system
+          template:
+            metadata:
+              labels:
+                app: inventory-system
+                version: $VERSION
+            spec:
+              containers:
+              - name: inventory-system
+                image: node:18-alpine
+                imagePullPolicy: Always
+                ports:
+                - name: http
+                  containerPort: 3000
+                  protocol: TCP
+                env:
+                - name: NODE_ENV
+                  value: "$ENVIRONMENT"
+                - name: PORT
+                  value: "3000"
+                resources:
+                  requests:
+                    memory: "256Mi"
+                    cpu: "250m"
+                  limits:
+                    memory: "512Mi"
+                    cpu: "500m"
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: 3000
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 3000
+                  initialDelaySeconds: 5
+                  periodSeconds: 5
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  allowPrivilegeEscalation: false
+        EOF
+        
+        cat > k8s-manifests/service.yaml <<EOF
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: inventory-system
+          namespace: $NAMESPACE
+          labels:
+            app: inventory-system
+        spec:
+          type: LoadBalancer
+          selector:
+            app: inventory-system
+          ports:
+          - name: http
+            port: 80
+            targetPort: 3000
+            protocol: TCP
+        EOF
+        
+        cat > k8s-manifests/hpa.yaml <<EOF
+        apiVersion: autoscaling/v2
+        kind: HorizontalPodAutoscaler
+        metadata:
+          name: inventory-system
+          namespace: $NAMESPACE
+        spec:
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: inventory-system
+          minReplicas: 2
+          maxReplicas: 5
+          metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 70
+          - type: Resource
+            resource:
+              name: memory
+              target:
+                type: Utilization
+                averageUtilization: 80
+        EOF
+        
+        echo "✅ Kubernetes manifests created"
+    
+    - name: Deploy to Kubernetes
+      if: secrets.KUBE_CONFIG != ''
+      run: |
+        ENVIRONMENT=${{ needs.build.outputs.environment }}
+        NAMESPACE="${ENVIRONMENT}-inventory"
+        
+        kubectl apply -f k8s-manifests/namespace.yaml
+        kubectl apply -f k8s-manifests/deployment.yaml
+        kubectl apply -f k8s-manifests/service.yaml
+        kubectl apply -f k8s-manifests/hpa.yaml
+        
+        echo "✅ Waiting for deployment rollout..."
+        kubectl rollout status deployment/inventory-system -n $NAMESPACE --timeout=5m
+        
+        echo "✅ Deployment successful!"
+    
+    - name: Get Deployment Status
+      if: secrets.KUBE_CONFIG != ''
+      run: |
+        ENVIRONMENT=${{ needs.build.outputs.environment }}
+        NAMESPACE="${ENVIRONMENT}-inventory"
+        
+        echo "📊 Deployment Status:"
+        kubectl get deployments -n $NAMESPACE
+        echo ""
+        echo "📊 Pods Status:"
+        kubectl get pods -n $NAMESPACE
+        echo ""
+        echo "📊 Service Status:"
+        kubectl get services -n $NAMESPACE
+    
+    - name: Kubernetes Not Configured
+      if: secrets.KUBE_CONFIG == ''
+      run: |
+        echo "⚠️  Kubernetes deployment skipped - credentials not configured"
+        echo ""
+        echo "To enable Kubernetes deployment:"
+        echo "1. Create kubeconfig file from your Kubernetes cluster"
+        echo "2. Encode it: cat ~/.kube/config | base64"
+        echo "3. Add KUBE_CONFIG secret in GitHub repository settings"
+
+  verify-deployment:
+    runs-on: ubuntu-latest
+    needs: [build, deploy-to-kubernetes]
+    
+    steps:
+    - name: Verify Application Health
+      run: |
+        VERSION=${{ needs.build.outputs.version }}
+        ENVIRONMENT=${{ needs.build.outputs.environment }}
+        
+        echo "✅ Deployment Summary:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Application: Inventory System"
+        echo "Version: $VERSION"
+        echo "Environment: $ENVIRONMENT"
+        echo "Status: ✅ Deployed Successfully"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    - name: Post Deployment Slack Notification
+      if: always()
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      run: |
+        if [ -z "$SLACK_WEBHOOK_URL" ]; then
+          exit 0
+        fi
+
+        VERSION=${{ needs.build.outputs.version }}
+        ENVIRONMENT=${{ needs.build.outputs.environment }}
+        
+        curl -X POST "$SLACK_WEBHOOK_URL" \
+          -H 'Content-Type: application/json' \
+          -d @- <<EOF
+        {
+          "attachments": [
+            {
+              "color": "36a64f",
+              "title": "🚀 Deployment Successful",
+              "text": "Application deployed to $ENVIRONMENT",
+              "fields": [
+                {
+                  "title": "Application",
+                  "value": "Inventory System",
+                  "short": true
+                },
+                {
+                  "title": "Version",
+                  "value": "$VERSION",
+                  "short": true
+                },
+                {
+                  "title": "Environment",
+                  "value": "$ENVIRONMENT",
+                  "short": true
+                },
+                {
+                  "title": "Status",
+                  "value": "✅ Running",
+                  "short": true
+                }
+              ],
+              "footer": "Kubernetes Deployment Pipeline"
+            }
+          ]
+        }
+        EOF

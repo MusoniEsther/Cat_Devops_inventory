@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-system
+  namespace: default
+  labels:
+    app: inventory-system
+spec:
+  type: LoadBalancer
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  selector:
+    app: inventory-system
+  ports:
+  - name: http
+    port: 80
+    targetPort: 3000
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 3000
+    protocol: TCP
